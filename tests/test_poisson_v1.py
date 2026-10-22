@@ -21,7 +21,8 @@ from ucl_pipeline.poisson_v1 import (
     select_and_evaluate,
     time_weight,
 )
-from ucl_pipeline.shadow import label_prediction, render_draft, write_shadow
+from ucl_pipeline.europa_prior import europa_results_before
+from ucl_pipeline.shadow import bettable, label_prediction, render_draft, write_shadow
 from ucl_pipeline.web_fixtures import EL_2026_10_22, hkjc_label
 from ucl_pipeline.v1_audit import leakage_problems
 
@@ -183,9 +184,20 @@ class PoissonV1Tests(unittest.TestCase):
         fixture = Match(
             fixture.date, fixture.season, "UEFA Europa League", "", "A", "B", None, None, "uefa.com", 9, kickoff="00:45 HK"
         )
-        labelled = label_prediction(fixture, {"abstain": 0, "reason": ""}, {"p_home": 0.5})
+        labelled = label_prediction(
+            fixture, {"abstain": 0, "reason": "", "flags": ["unseen_competition_level"]}, {"p_home": 0.5}
+        )
         self.assertEqual(labelled["role"], "v1_experimental")
         self.assertIn("reference_competition_level", labelled["warnings"])
+        seen = label_prediction(fixture, {"abstain": 0, "reason": "", "flags": []}, {"p_home": 0.5})
+        self.assertEqual(seen["warnings"], ["experimental_europa_unvalidated"])
+        prior = europa_results_before(date(2026, 10, 22))
+        self.assertEqual(len(prior), 36)
+        self.assertTrue(all(match.date < date(2026, 10, 22) for match in prior))
+        self.assertEqual(len(europa_results_before(date(2026, 10, 15))), 18)
+        self.assertTrue(bettable(0.67, True))
+        self.assertFalse(bettable(0.43, True))
+        self.assertFalse(bettable(0.67, False))
         unseen = label_prediction(fixture, {"abstain": 1, "reason": "unseen_team"}, {"p_home": ""})
         self.assertEqual(unseen["role"], "abstain")
         fallback = label_prediction(fixture, {"abstain": 1, "reason": "unseen_team"}, {"p_home": 0.4})
@@ -251,6 +263,34 @@ class PoissonV1Tests(unittest.TestCase):
         self.assertIn("FB7332 祖雲達斯 vs 雷恩", named)
         self.assertNotIn("Juventus", named)
         self.assertIn("大2.5 48.3%｜小2.5 51.7% → 傾向小", named)
+        self.assertIn("主勝 51.6%", named)
+        self.assertIn("未分勝負", render_draft(
+            [{
+                "kickoff": "03:00 HK", "home_team": "A", "away_team": "B", "role": "v1_experimental",
+                "fresh": "1", "p_home_v1": 0.43, "p_draw_v1": 0.24, "p_away_v1": 0.33,
+                "p_over_v1": 0.40, "p_btts_v1": 0.60, "home_xg_v1": 1.2, "away_xg_v1": 1.4,
+            }],
+            {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
+        ))
+        stale = render_draft(
+            [{
+                "kickoff": "03:00 HK", "home_team": "A", "away_team": "B", "role": "v1_experimental",
+                "fresh": "0", "p_home_v1": 0.70, "p_draw_v1": 0.15, "p_away_v1": 0.15,
+                "p_over_v1": 0.70, "p_btts_v1": 0.70, "home_xg_v1": 1.2, "away_xg_v1": 1.0,
+            }],
+            {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
+        )
+        self.assertIn("不作挑選", stale)
+        self.assertNotIn("傾向主勝", stale)
+        blank = render_draft(
+            [{
+                "kickoff": "00:45 HK", "home_team": "FC Ararat-Armenia", "away_team": "AZ",
+                "role": "abstain", "market_home": "6.00", "market_draw": "4.50", "market_away": "1.34",
+            }],
+            {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
+        )
+        self.assertIn("馬會主6.00", blank)
+        self.assertIn("冇模型機率", blank)
         self.assertIn("V1實驗", text)
         self.assertIn("大2.5 60.0%｜小2.5 40.0% → 傾向大", text)
         labelled = [hkjc_label(home, away) for _kick, home, away in EL_2026_10_22]
