@@ -71,10 +71,38 @@ EL_2026_10_22 = (
 )
 
 
+# Home, draw, away decimal odds from the 23 October 2026 HKJC board. Display only.
+HKJC_HAD_2026_10_22 = {
+    ("FC Ararat-Armenia", "AZ"): (6.00, 4.50, 1.34),
+    ("Ferencvárosi TC", "SCU Torreense"): (1.20, 5.20, 9.00),
+    ("GNK Dinamo Zagreb", "NEC"): (1.43, 4.15, 5.10),
+    ("Juventus FC", "Stade Rennais FC 1901"): (1.48, 3.90, 5.00),
+    ("Lech Poznań", "Sunderland AFC"): (4.15, 3.60, 1.63),
+    ("OFI Heraklion", "Bayer 04 Leverkusen"): (13.50, 7.00, 1.09),
+    ("Union Saint-Gilloise", "Hapoel Be'er Sheva"): (1.26, 4.95, 7.25),
+    ("SK Sturm Graz", "Olympique de Marseille"): (3.25, 3.60, 1.82),
+    ("AFC Bournemouth", "AC Milan"): (1.89, 3.40, 3.20),
+    ("Beşiktaş", "Crystal Palace FC"): (2.12, 3.40, 2.73),
+    ("Celtic FC", "RC Celta de Vigo"): (2.46, 3.25, 2.39),
+    ("Viktoria Plzeň", "PFC Levski Sofia"): (1.51, 3.85, 4.75),
+    ("Jagiellonia Białystok", "RSC Anderlecht"): (2.70, 3.40, 2.13),
+    ("Lillestrøm SK", "Real Sociedad de Fútbol"): (4.90, 4.00, 1.47),
+    ("NK Celje", "FC Red Bull Salzburg"): (4.40, 3.95, 1.53),
+    ("Olympiakos Piraeus", "AC Sparta Praha"): (1.38, 4.10, 6.10),
+    ("AC Omonia", "Sport Lisboa e Benfica"): (8.00, 5.10, 1.23),
+    ("TSG 1899 Hoffenheim", "Olympique Lyonnais"): (1.78, 3.85, 3.20),
+}
+
+
 def hkjc_label(home: str, away: str) -> tuple[str, str, str]:
     """Return HKJC code and Chinese names. Empty strings when this fixture has none."""
     code, home_zh, away_zh = HKJC_EL_2026_10_22.get((home, away), ("", "", ""))
     return code, home_zh, away_zh
+
+
+def hkjc_had(home: str, away: str) -> tuple[float, float, float] | None:
+    """HKJC home/draw/away odds. None when this fixture has no stored board price."""
+    return HKJC_HAD_2026_10_22.get((home, away))
 
 
 def web_fixtures_on(on: date) -> list[Match]:
