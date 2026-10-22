@@ -20,7 +20,9 @@ from ucl_pipeline.poisson_v1 import (
     predict_rates,
 )
 from ucl_pipeline.predict import _merge_fixtures, fixtures_for, load_prediction_matches
-from ucl_pipeline.web_fixtures import hkjc_label, web_fixtures_on
+from ucl_pipeline.web_fixtures import hkjc_had, hkjc_label, web_fixtures_on
+
+STALE_DAYS = 30
 
 MODEL_VERSION = f"poisson-v1/{__version__}/decay={FROZEN_DECAY}/l2={FROZEN_L2}"
 
@@ -58,6 +60,40 @@ def _lean(options: list[tuple[str, float]]) -> str:
     return f"傾向{names[0]}"
 
 
+def _named(options: list[tuple[str, float]], *, fresh: bool, floor: float = 0.5) -> str:
+    """A pick needs one side strictly above the floor and a recent match for both clubs."""
+    if not fresh:
+        return "不作挑選"
+    best = max(value for _name, value in options)
+    if best <= floor:
+        return "未分勝負"
+    return _lean(options)
+
+
+def bettable(probability: float, fresh: bool) -> bool:
+    """Value screen: the model's own side, above one half, and both clubs recently scored."""
+    return fresh and probability > 0.5
+
+
+def _last_scored(history: list[Match], team: str, cutoff: date) -> date | None:
+    last = None
+    for match in history:
+        if match.date >= cutoff or match.goals_pair() is None or match.score_ambiguous:
+            continue
+        if match.home_team == team or match.away_team == team:
+            if last is None or match.date > last:
+                last = match.date
+    return last
+
+
+def fresh_pair(history: list[Match], home: str, away: str, cutoff: date) -> bool:
+    for team in (home, away):
+        last = _last_scored(history, team, cutoff)
+        if last is None or (cutoff - last).days > STALE_DAYS:
+            return False
+    return True
+
+
 def _market_lines(tag: str, row: dict, suffix: str) -> list[str]:
     """Spell out both sides. Over 2.5 below one half means the under is higher."""
     home = float(row[f"p_home_{suffix}"])
@@ -68,14 +104,15 @@ def _market_lines(tag: str, row: dict, suffix: str) -> list[str]:
     btts = float(row[f"p_btts_{suffix}"])
     no_btts = 1.0 - btts
     note = "｜近況少" if suffix == "v1" and "low_history" in row.get("v1_flags", "") else ""
+    fresh = row.get("fresh", "1") == "1"
     return [
         f"{tag}{note}",
         (
             f"主勝 {_pct(home)}｜和 {_pct(draw)}｜客勝 {_pct(away)} → "
-            f"{_lean([('主勝', home), ('和', draw), ('客勝', away)])}"
+            f"{_named([('主勝', home), ('和', draw), ('客勝', away)], fresh=fresh)}"
         ),
-        f"大2.5 {_pct(over)}｜小2.5 {_pct(under)} → {_lean([('大', over), ('小', under)])}",
-        f"雙方入球 {_pct(btts)}｜冇 {_pct(no_btts)} → {_lean([('有', btts), ('冇', no_btts)])}",
+        f"大2.5 {_pct(over)}｜小2.5 {_pct(under)} → {_named([('大', over), ('小', under)], fresh=fresh)}",
+        f"雙方入球 {_pct(btts)}｜冇 {_pct(no_btts)} → {_named([('有', btts), ('冇', no_btts)], fresh=fresh)}",
         f"預期入球 {float(row[f'home_xg_{suffix}']):.2f}-{float(row[f'away_xg_{suffix}']):.2f}",
     ]
 
@@ -95,7 +132,8 @@ def label_prediction(fixture: Match, v1: dict, v0_row: dict) -> dict:
         role = "v1_experimental" if experimental else "v1"
         if experimental:
             warnings.append("experimental_europa_unvalidated")
-            warnings.append("reference_competition_level")
+            if "unseen_competition_level" in v1.get("flags", []):
+                warnings.append("reference_competition_level")
     return {"role": role, "warnings": warnings}
 
 
@@ -107,9 +145,8 @@ def render_draft(rows: list[dict], meta: dict) -> str:
         f"預測截止：{meta['prediction_cutoff']}（當日及之後的比分不入模）",
         f"資料版本：{meta['data_version']['sha256_12']}，最後有比分日期 {meta['data_version']['max_date']}",
         "V1 凍結 decay=0.0015、L2=4。歐霸沒有用來選參數，V1 標明實驗。",
-        "歐霸評分水平用訓練參考聯賽，不是歐霸自己的入球水平。",
-        "隊名用馬會 FB 場次譯名。",
-        "讀法：1X2 的傾向係主勝、和、客勝入面最高，可以低過 50%。大2.5＝總入球 3 球或以上，小2.5＝2 球或以下；大低過 50% 就係傾向小。雙方入球＝兩隊都有入球。",
+        "挑選：高過 50% 先叫傾向。近況超過 30 日不作挑選。大2.5＝3 球或以上。",
+        "隊名用馬會 FB 場次譯名。未知球隊只列馬會主客和，冇模型機率。",
         meta["source_summary"],
         "",
     ]
@@ -121,7 +158,13 @@ def render_draft(rows: list[dict], meta: dict) -> str:
         prefix = f"{code} " if code else ""
         lines.append(f"{row['kickoff']} {prefix}{home} vs {away}")
         if row["role"] == "abstain":
-            lines.append("無法預測（未知球隊）")
+            if row.get("market_home"):
+                lines.append(
+                    "無法預測（未知球隊）。"
+                    f"馬會主{row['market_home']} 和{row['market_draw']} 客{row['market_away']}，冇模型機率"
+                )
+            else:
+                lines.append("無法預測（未知球隊）")
         elif row["role"] == "v0_fallback":
             lines.extend(_market_lines("V1 無法使用。V0後備", row, "v0"))
         else:
@@ -166,6 +209,7 @@ def shadow_rows(history: list[Match], fixtures: list[Match], on: date) -> tuple[
         v1 = predict_rates(fit, fixture.home_team, fixture.away_team, fixture.competition)
         labelled = label_prediction(fixture, v1, v0_row)
         code, home_zh, away_zh = hkjc_label(fixture.home_team, fixture.away_team)
+        had = hkjc_had(fixture.home_team, fixture.away_team)
         row = {
             "date": fixture.date.isoformat(),
             "kickoff": fixture.kickoff,
@@ -175,6 +219,10 @@ def shadow_rows(history: list[Match], fixtures: list[Match], on: date) -> tuple[
             "hkjc_code": code,
             "home_zh": home_zh,
             "away_zh": away_zh,
+            "fresh": "1" if fresh_pair(history, fixture.home_team, fixture.away_team, on) else "0",
+            "market_home": "" if had is None else f"{had[0]:.2f}",
+            "market_draw": "" if had is None else f"{had[1]:.2f}",
+            "market_away": "" if had is None else f"{had[2]:.2f}",
             "home_team": fixture.home_team,
             "away_team": fixture.away_team,
             "model_version": MODEL_VERSION,
@@ -281,7 +329,13 @@ def run_shadow(cache_dir: Path, output_dir: Path, on: date, *, refresh: bool = F
     source_notes: list[dict] = []
     refreshed = load_football_json(cache_dir, refresh, source_notes, seasons=("2026-27",), keep_unplayed=True)
     cl_status, _cl_names = _dir_names(CL_API.format(season="2026-27"), cache_dir, refresh)
+    from ucl_pipeline.dedupe import dedupe
+    from ucl_pipeline.europa_prior import europa_results_before
+
     history, unplayed, _notes = load_prediction_matches(cache_dir, refresh=False)
+    prior = europa_results_before(on)
+    if prior:
+        history, _conflicts, _ambiguous = dedupe(list(history) + prior)
     web = web_fixtures_on(on)
     fixtures = _merge_fixtures(fixtures_for(unplayed, on), web)
     order = {(match.home_team, match.away_team): index for index, match in enumerate(web)}
@@ -302,7 +356,7 @@ def run_shadow(cache_dir: Path, output_dir: Path, on: date, *, refresh: bool = F
         for match in refreshed
         if match.goals_pair() is None and last_scored is not None and last_scored < match.date < on
     ]
-    summary += f" 截止前未填比分場數 {len(gap)}。"
+    summary += f" 截止前未填比分場數 {len(gap)}。歐霸聯賽階段賽前完場 {len(prior)}，當輪賽果不入模。"
     teams = _team_latest(history, fixtures, on)
     updated = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M 香港時間")
     return write_shadow(
