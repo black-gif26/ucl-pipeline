@@ -196,6 +196,7 @@ class PoissonV1Tests(unittest.TestCase):
         self.assertTrue(all(match.date < date(2026, 10, 22) for match in prior))
         self.assertEqual(len(europa_results_before(date(2026, 10, 15))), 18)
         self.assertTrue(bettable(0.67, True))
+        self.assertFalse(bettable(0.60, True))
         self.assertFalse(bettable(0.43, True))
         self.assertFalse(bettable(0.67, False))
         unseen = label_prediction(fixture, {"abstain": 1, "reason": "unseen_team"}, {"p_home": ""})
@@ -231,9 +232,11 @@ class PoissonV1Tests(unittest.TestCase):
                 "source_summary": "齊全度未知",
             },
         )
-        self.assertIn("V1實驗", text)
-        self.assertIn("無法預測", text)
+        self.assertNotIn("V1實驗", text)
+        self.assertNotIn("無法預測", text)
         self.assertIn("不是賽果", text)
+        self.assertIn("高過 60%", text)
+        self.assertIn("今輪沒有主客和最高機率高過 60% 的場次。", text)
         named = render_draft(
             [
                 {
@@ -260,18 +263,32 @@ class PoissonV1Tests(unittest.TestCase):
                 "source_summary": "齊全度未知",
             },
         )
-        self.assertIn("FB7332 祖雲達斯 vs 雷恩", named)
+        self.assertNotIn("FB7332 祖雲達斯 vs 雷恩", named)
         self.assertNotIn("Juventus", named)
-        self.assertIn("大2.5 48.3%｜小2.5 51.7% → 傾向小", named)
-        self.assertIn("主勝 51.6%", named)
-        self.assertIn("未分勝負", render_draft(
+        self.assertNotIn("主勝 51.6%", named)
+        shown = render_draft(
+            [{
+                "kickoff": "00:45 HK", "hkjc_code": "FB7343", "home_zh": "克里特", "away_zh": "利華古遜",
+                "home_team": "OFI", "away_team": "Bayer 04 Leverkusen", "role": "v1_experimental",
+                "fresh": "1", "p_home_v1": 0.143, "p_draw_v1": 0.186, "p_away_v1": 0.670,
+                "p_over_v1": 0.61, "p_btts_v1": 0.40, "home_xg_v1": 0.94, "away_xg_v1": 2.26,
+            }],
+            {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
+        )
+        self.assertIn("FB7343 克里特 vs 利華古遜", shown)
+        self.assertIn("客勝 67.0% → 傾向客勝", shown)
+        self.assertIn("大2.5 61.0%｜小2.5 39.0% → 傾向大", shown)
+        self.assertIn("未分勝負", shown)
+        hidden = render_draft(
             [{
                 "kickoff": "03:00 HK", "home_team": "A", "away_team": "B", "role": "v1_experimental",
                 "fresh": "1", "p_home_v1": 0.43, "p_draw_v1": 0.24, "p_away_v1": 0.33,
                 "p_over_v1": 0.40, "p_btts_v1": 0.60, "home_xg_v1": 1.2, "away_xg_v1": 1.4,
             }],
             {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
-        ))
+        )
+        self.assertNotIn("03:00 HK", hidden)
+        self.assertIn("今輪沒有主客和最高機率高過 60% 的場次。", hidden)
         stale = render_draft(
             [{
                 "kickoff": "03:00 HK", "home_team": "A", "away_team": "B", "role": "v1_experimental",
@@ -289,10 +306,18 @@ class PoissonV1Tests(unittest.TestCase):
             }],
             {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
         )
-        self.assertIn("馬會主6.00", blank)
-        self.assertIn("冇模型機率", blank)
-        self.assertIn("V1實驗", text)
-        self.assertIn("大2.5 60.0%｜小2.5 40.0% → 傾向大", text)
+        self.assertNotIn("馬會主6.00", blank)
+        self.assertNotIn("冇模型機率", blank)
+        self.assertIn("今輪沒有主客和最高機率高過 60% 的場次。", blank)
+        exact = render_draft(
+            [{
+                "kickoff": "03:00 HK", "home_team": "A", "away_team": "B", "role": "v1_experimental",
+                "fresh": "1", "p_home_v1": 0.60, "p_draw_v1": 0.20, "p_away_v1": 0.20,
+                "p_over_v1": 0.60, "p_btts_v1": 0.55, "home_xg_v1": 1.7, "away_xg_v1": 1.1,
+            }],
+            {"updated_at_hkt": "t", "prediction_cutoff": "2026-10-22", "data_version": {"sha256_12": "a", "max_date": "2026-09-20"}, "source_summary": "s"},
+        )
+        self.assertNotIn("03:00 HK", exact)
         labelled = [hkjc_label(home, away) for _kick, home, away in EL_2026_10_22]
         self.assertEqual(len(labelled), 18)
         self.assertTrue(all(code.startswith("FB") and home_zh and away_zh for code, home_zh, away_zh in labelled))
